@@ -1,0 +1,68 @@
+version: "3.8"
+services:
+  traefik:
+    image: "traefik:v2.5"
+    command:
+      #- "--log.level=DEBUG"
+      
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.swarmMode=false"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.dnstcp.address=:5858/tcp"
+      - "--entrypoints.dnsudp.address=:5858/udp"
+      - "--entrypoints.cloudflared-udp.address=:5859/udp"
+      - "--entrypoints.cloudflared-tcp.address=:5859/tcp"
+      - "--entrypoints.cloudflared-udp.udp.timeout=10s"
+    ports:
+      - target: 5858
+        published: 5858
+        protocol: tcp
+      - target: 5858
+        published: 5858
+        protocol: udp
+      - target: 5859
+        published: 5859
+        protocol: udp
+      - target: 5859
+        published: 5859
+        protocol: tcp
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+
+  pihole:
+    image: pihole/pihole:latest
+    environment:
+      TZ: 'Europe/Berlin'
+    volumes:
+      - './etc-pihole:/etc/pihole'
+      - './etc-dnsmasq:/etc/dnsmasq.d'
+    restart: unless-stopped
+    ports:
+      - "8300:80"
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.tcp.routers.dnstcp.entrypoints=dnstcp"
+      - "traefik.tcp.routers.dnstcp.rule=HostSNI(`*`)"
+      - "traefik.tcp.services.pihole.loadbalancer.server.port=53"
+
+      - "traefik.udp.routers.dnsudp.entrypoints=dnsudp"
+      - "traefik.udp.routers.dnsudp.service=pihole"
+      - "traefik.udp.services.pihole.loadbalancer.server.port=53"
+
+  cloudflared:
+    image: raspbernetes/cloudflared:latest
+    # --max-upstream-conns 2 => https://github.com/cloudflare/cloudflared/issues/91
+    command: "proxy-dns --address 0.0.0.0 --port 5811 --max-upstream-conns 1 --upstream https://dns11.quad9.net/dns-query"
+  
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.tcp.routers.cloudflared.entrypoints=cloudflared-tcp"
+      - "traefik.tcp.services.cloudflared.loadbalancer.server.port=5811"
+      - "traefik.tcp.routers.cloudflared.rule=HostSNI(`*`)"
+      
+      - "traefik.udp.routers.cloudflared.entrypoints=cloudflared-udp"
+      - "traefik.udp.routers.cloudflared.service=cloudflared"
+      - "traefik.udp.services.cloudflared.loadbalancer.server.port=5811"
